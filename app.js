@@ -620,7 +620,11 @@
     state.wizard = { step:1, data:{
       patientName:'', age:'', diagnosis:'', treatment:'', estimatedCost:'', durationDays:'', emergency:'Medium',
       hospitalName: state.hospital.name, hospitalId: state.hospital.id, hospitalAddress:'', hospitalContact:'', hospitalEmail:'',
-      doctorName: state.hospital.doctor, doctorRegNo:''
+     doctorName: state.hospital.doctor,
+doctorRegNo: '',
+paymentUpiId: '',
+paymentQrData: '',
+paymentQrName: ''
     }, docs:[] };
     state.page = 'register';
     render();
@@ -637,12 +641,18 @@
 
   function wizardView(){
     const w = state.wizard;
-    const steps = ['Treatment & Hospital Details','Medical Documents','Review & Submit'];
+    const steps = [
+  'Treatment & Hospital Details',
+  'Medical Documents',
+  'Payment Details',
+  'Review & Submit'
+];
     const stepBar = steps.map((s,i)=>`<div class="wstep ${w.step===i+1?'active':''} ${w.step>i+1?'done':''}"><span class="n">${w.step>i+1?'✓':i+1}</span><span class="t">${s}</span></div>`).join('');
     let body = '';
-    if (w.step===1) body = wizardStep1(w.data);
-    if (w.step===2) body = wizardStep2(w.docs);
-    if (w.step===3) body = wizardStep3(w);
+   if (w.step === 1) body = wizardStep1(w.data);
+if (w.step === 2) body = wizardStep2(w.docs);
+if (w.step === 3) body = wizardStepPayment(w.data);
+if (w.step === 4) body = wizardStep3(w);
     return `<div class="wizard-steps">${stepBar}</div>
       <div class="panel-card"><div class="panel-body">${body}</div></div>`;
   }
@@ -697,7 +707,77 @@
       <button class="abtn primary" data-action="wizard-next">Continue</button>
     </div>`;
   }
+function wizardStepPayment(d) {
+  return `
+    <div class="section-label">Hospital Payment Details</div>
 
+    <div class="form-grid">
+      <div class="fld full">
+        <label>Hospital UPI ID</label>
+        <input
+          data-w="paymentUpiId"
+          value="${esc(d.paymentUpiId)}"
+          placeholder="hospitalname@bank"
+        />
+      </div>
+
+      <div class="fld full">
+        <label>Upload Hospital UPI QR Code</label>
+        <input
+          id="paymentQrFile"
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          data-payment-qr
+        />
+      </div>
+
+      ${
+        d.paymentQrData
+          ? `
+            <div class="fld full">
+              <label>QR Code Preview</label>
+
+              <img
+                src="${d.paymentQrData}"
+                alt="Hospital UPI QR Code"
+                style="max-width:220px;max-height:220px;"
+              />
+
+              <button
+                type="button"
+                class="abtn ghost sm"
+                data-action="remove-payment-qr"
+              >
+                Remove QR
+              </button>
+            </div>
+          `
+          : ''
+      }
+    </div>
+
+    <div class="notice info">
+      <span>
+        Enter the hospital's genuine UPI ID or upload its
+        genuine UPI QR code. Payments will go directly to
+        the account linked to those payment details.
+      </span>
+    </div>
+
+    <div class="modal-actions"
+         style="justify-content:space-between">
+
+      <button class="abtn ghost" data-action="wizard-back">
+        Back
+      </button>
+
+      <button class="abtn primary" data-action="wizard-next">
+        Continue to Review
+      </button>
+
+    </div>
+  `;
+}
   function wizardStep3(w){
     const d = w.data;
     const docList = w.docs.length ? w.docs.map(x=>`<div class="doc-file" style="margin-bottom:8px"><span class="nm">${esc(x.name)}</span><span class="st">${esc(x.status)}</span></div>`).join('') : '<div class="u-hint">No documents uploaded</div>';
@@ -756,6 +836,8 @@
           hospitalEmail:d.hospitalEmail,
           doctorName:d.doctorName,
           doctorRegNo:d.doctorRegNo
+           paymentUpiId: d.paymentUpiId,
+paymentQrData: d.paymentQrData
         })
       });
 
@@ -1297,20 +1379,80 @@
       save();
     }
   });
-  document.addEventListener('change', function(e){
-    if (e.target.dataset && e.target.dataset.filter){
-      state.filters[e.target.dataset.filter] = e.target.value; save(); render(); return;
-    }
-    if (e.target.dataset && e.target.dataset.doc){
-      const file = e.target.files && e.target.files[0];
-      if (file){ state.wizard.docs = state.wizard.docs.filter(d=>d.key!==e.target.dataset.doc);
-        state.wizard.docs.push({key:e.target.dataset.doc, name:file.name, status:'Uploaded'}); render(); }
-      return;
-    }
-  });
+  document.addEventListener('change', function(e) {
+// Handle filter changes
+if (e.target.dataset && e.target.dataset.filter) {
+state.filters[e.target.dataset.filter] = e.target.value;
+save();
+render();
+return;
+}
 
+// Handle document uploads
+if (e.target.dataset && e.target.dataset.doc) {
+    const file = e.target.files && e.target.files[0];
+
+    if (file) {
+        state.wizard.docs = state.wizard.docs.filter(
+            d => d.key !== e.target.dataset.doc
+        );
+
+        state.wizard.docs.push({
+            key: e.target.dataset.doc,
+            name: file.name,
+            status: 'Uploaded'
+        });
+    }
+
+    return;
+}
+
+// Handle hospital UPI QR code upload
+if (e.target.id === 'paymentQr') {
+    const file = e.target.files && e.target.files[0];
+
+    if (!file) return;
+
+    // Allow PNG, JPG, and WebP images
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+        alert('Please select a PNG, JPG, or WebP image.');
+        e.target.value = '';
+        return;
+    }
+
+    // Maximum file size: 700 KB
+    if (file.size > 700 * 1024) {
+        alert('QR image must be smaller than 700 KB.');
+        e.target.value = '';
+        return;
+    }
+
+    const reader = new FileReader();
+
+    reader.onload = function() {
+        if (state.wizard) {
+            state.wizard.data = state.wizard.data || {};
+            state.wizard.data.paymentQrData = reader.result;
+
+            alert('UPI QR code uploaded successfully!');
+            render();
+        }
+    };
+
+    reader.onerror = function() {
+        alert('Unable to read the QR image. Please try again.');
+    };
+
+    reader.readAsDataURL(file);
+    return;
+}
+
+});
   function collectWizard(){
-    if (!state.wizard || state.wizard.step!==1) return;
+   if (
+  !state.wizard ||
+  ![1, 3].includes(state.wizard.step)
+) return;
     $$('[data-w]').forEach(inp => { state.wizard.data[inp.dataset.w] = inp.value; });
   }
   function validateStep(){
