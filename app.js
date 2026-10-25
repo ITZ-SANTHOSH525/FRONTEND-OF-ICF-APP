@@ -410,13 +410,13 @@
     const active = v.filter(c=>c.status==='active'||c.status==='approved');
     const completed = v.filter(c=>c.status==='completed');
     const recent = [...v].sort((a,b)=> new Date(b.submittedDate)-new Date(a.submittedDate)).slice(0,3);
-    const myTotal = state.donor.donations.reduce((s,d)=>s+d.amount,0);
+    const myTotal = state.donor.donations.filter(d=>d.status==='Verified').reduce((s,d)=>s+d.amount,0);
     return `
     <div class="stat-grid">
       <div class="stat accent"><div class="k">Total Verified Cases</div><div class="v">${v.length}</div><div class="d">Cleared by health authority</div></div>
       <div class="stat"><div class="k">Total Amount Raised</div><div class="v">${money(totalRaised)}</div><div class="d">Across all verified cases</div></div>
       <div class="stat"><div class="k">Active Campaigns</div><div class="v">${active.length}</div><div class="d">Currently accepting support</div></div>
-      <div class="stat"><div class="k">Your Total Donations</div><div class="v">${money(myTotal)}</div><div class="d">${state.donor.donations.length} contributions</div></div>
+      <div class="stat"><div class="k">Your Total Donations</div><div class="v">${money(myTotal)}</div><div class="d">${state.donor.donations.filter(d=>d.status==='Verified').length} verified contributions</div></div>
     </div>
 
     <div class="two-col">
@@ -482,23 +482,24 @@
 
   function donorDonations(){
     const d = state.donor.donations;
-    const active = d.filter(x=>x.status==='Active');
-    const done = d.filter(x=>x.status==='Completed');
-    const row = x => `<div class="list-row">
+    const verified = d.filter(x=>x.status==='Verified');
+    const pending = d.filter(x=>x.status==='Pending Verification');
+    const rejected = d.filter(x=>x.status==='Rejected');
+    const row = x => {
+      const cls = x.status==='Verified' ? 'completed' : x.status==='Rejected' ? 'declined' : 'pending';
+      return `<div class="list-row">
         <span class="case-avatar" style="width:40px;height:40px;border-radius:12px;font-size:13px">${initials(x.patient)}</span>
-        <div class="lr-main"><b>${esc(x.patient)}</b><span>${esc(x.caseId)} · ${x.date}</span></div>
-        <div style="text-align:right"><b class="mono">${money(x.amount)}</b><div><span class="badge ${x.status==='Active'?'active':'completed'}">${x.status}</span></div></div>
+        <div class="lr-main"><b>${esc(x.patient)}</b><span>${esc(x.caseId)} · ${esc(x.date)} · Ref: ${esc(x.paymentRef||'—')}</span></div>
+        <div style="text-align:right"><b class="mono">${money(x.amount)}</b><div><span class="badge ${cls}">${esc(x.status||'Pending Verification')}</span></div></div>
       </div>`;
+    };
     return `
     <div class="stat-grid">
-      <div class="stat accent"><div class="k">Total Donated</div><div class="v">${money(d.reduce((s,x)=>s+x.amount,0))}</div></div>
-      <div class="stat"><div class="k">Active Donations</div><div class="v">${active.length}</div></div>
-      <div class="stat"><div class="k">Completed Donations</div><div class="v">${done.length}</div></div>
+      <div class="stat accent"><div class="k">Verified Donations</div><div class="v">${money(verified.reduce((s,x)=>s+x.amount,0))}</div></div>
+      <div class="stat"><div class="k">Pending Verification</div><div class="v">${pending.length}</div></div>
+      <div class="stat"><div class="k">Rejected Submissions</div><div class="v">${rejected.length}</div></div>
     </div>
-    <div class="two-col">
-      <div class="panel-card"><div class="panel-head"><h3>Donation History</h3></div><div class="panel-body">${d.map(row).join('') || emptyBox('No donations yet')}</div></div>
-      <div class="panel-card"><div class="panel-head"><h3>Payment History</h3></div><div class="panel-body">${d.map(x=>`<div class="list-row"><div class="lr-main"><b>${esc(x.id)}</b><span>${x.date} · ${esc(x.caseId)}</span></div><span class="badge completed">Paid</span></div>`).join('') || emptyBox('No payments yet')}</div></div>
-    </div>`;
+    <div class="panel-card"><div class="panel-head"><h3>Donation &amp; Payment History</h3></div><div class="panel-body">${d.map(row).join('') || emptyBox('No donations submitted yet')}</div></div>`;
   }
 
   function donorSaved(){
@@ -508,7 +509,7 @@
 
   function donorProfile(){
     const d = state.donor;
-    const total = d.donations.reduce((s,x)=>s+x.amount,0);
+    const total = d.donations.filter(x=>x.status==='Verified').reduce((s,x)=>s+x.amount,0);
     const cases = new Set(d.donations.map(x=>x.caseId)).size;
     return `
     <div class="panel-card"><div class="panel-body">
@@ -842,11 +843,27 @@
   /* ============================================================
      CASE DETAILS MODAL
      ============================================================ */
-  function viewCase(id){
+  async function viewCase(id){
     const c = getCase(id); if (!c) return;
+    let paymentRows = [];
+    if (state.role==='hospital' || state.role==='authority') {
+      try {
+        const paymentRes = await api(`/donations/case/${encodeURIComponent(id)}`);
+        paymentRows = paymentRes.data.donations || [];
+      } catch (err) {
+        toast('Payment records unavailable', err.message, 'bad');
+      }
+    }
     const remaining = Math.max(0, c.estimatedCost - c.raisedAmount);
     const docs = c.documents.map(d=>`<div class="doc-file" style="margin-bottom:8px"><span class="nm">${esc(d.name)}</span><span class="st">${esc(d.status)}</span></div>`).join('') || '<div class="u-hint">No documents</div>';
-    const donors = c.donors.length ? c.donors.map(d=>`<div class="list-row"><div class="lr-main"><b>${esc(d.name)}</b><span>${d.date}</span></div><b class="mono">${money(d.amount)}</b></div>`).join('') : '<div class="u-hint">No donations yet</div>';
+    const donors = c.donors.length ? c.donors.map(d=>`<div class="list-row"><div class="lr-main"><b>${esc(d.name)}</b><span>${esc(d.date)}</span></div><b class="mono">${money(d.amount)}</b></div>`).join('') : '<div class="u-hint">No verified donations yet</div>';
+    const paymentReview = (state.role==='hospital' || state.role==='authority') ? `
+      <div class="review-block" style="margin-top:14px"><h4>UPI Payment Verification</h4>
+      ${paymentRows.length ? paymentRows.map(p=>`<div class="list-row" style="gap:12px;align-items:center">
+        <div class="lr-main"><b>${esc(p.donorName||'Donor')} · ${money(p.amount)}</b><span>${esc(p.id)} · Ref: ${esc(p.paymentRef||'—')} · ${esc(p.date)} · ${esc(p.status)}</span></div>
+        ${p.status==='Pending Verification' ? `<button class="abtn ok sm" data-action="verify-donation" data-id="${esc(p.id)}" data-case-id="${esc(id)}">Verify</button><button class="abtn danger sm" data-action="reject-donation" data-id="${esc(p.id)}" data-case-id="${esc(id)}">Reject</button>` : ''}
+      </div>`).join('') : '<div class="u-hint">No payment submissions for this case.</div>'}
+      <div class="u-hint" style="margin-top:8px">Verify the UPI transaction in the hospital bank/UPI account before approving it.</div></div>` : '';
     let foot = '';
     if (state.role==='donor' && ['approved','active','completed'].includes(c.status)) {
       foot = `<button class="abtn ghost" data-action="toggle-save" data-id="${c.id}">${state.donor.saved.includes(c.id)?'Remove from Saved':'Save Case'}</button>
@@ -884,7 +901,8 @@
         </dl></div>
         <div class="review-block"><h4>Documents</h4>${docs}</div>
       </div>
-      <div class="review-block" style="margin-top:14px"><h4>Donation Tracking</h4>${donors}</div>
+      <div class="review-block" style="margin-top:14px"><h4>Verified Donation Tracking</h4>${donors}</div>
+      ${paymentReview}
       <div class="modal-actions">${foot}<button class="abtn ghost" data-action="close-modal">Close</button></div>
     `);
   }
@@ -898,13 +916,17 @@
       <h3>Support ${esc(c.patientName)}</h3>
       <div class="m-sub">${esc(c.treatment)} · ${esc(c.hospitalName)} · ${esc(c.id)}</div>
       ${progress(c)}
-      <div class="fld" style="margin-top:16px"><label>Donation Amount (₹)</label><input id="donateAmt" type="number" min="100" placeholder="e.g. 5000" /></div>
+      <div class="fld" style="margin-top:16px"><label>Donation Amount (₹)</label><input id="donateAmt" type="number" min="1" step="0.01" placeholder="e.g. 5000" /></div>
       <div class="filter-row" style="margin-top:12px">${[1000,5000,10000,25000].map(a=>`<button class="chip" data-action="donate-quick" data-amt="${a}">₹${a.toLocaleString('en-IN')}</button>`).join('')}</div>
       ${upi ? `<div class="notice info" style="margin-top:14px"><span><b>Hospital UPI ID:</b> ${esc(upi)}</span></div>` : ''}
       ${qr ? `<div style="text-align:center;margin:12px 0"><img src="${qr}" alt="Hospital payment QR code" style="max-width:220px;max-height:220px;object-fit:contain;border:1px solid #ddd;border-radius:12px;padding:8px"/><div class="u-hint">Scan with your UPI app</div></div>` : ''}
-      ${!payReady ? `<div class="notice warn"><span>This hospital has not added payment details yet. Please contact the hospital before donating.</span></div>` : `<div class="notice warn" style="margin-top:12px"><span>Payment transfers directly from your UPI app to the hospital account. Do not treat a payment as complete until your UPI app confirms success. The app will not falsely mark it as paid.</span></div>`}
+      ${!payReady ? `<div class="notice warn"><span>This hospital has not added payment details yet. Please contact the hospital before donating.</span></div>` : `
+        <div class="notice warn" style="margin-top:12px"><span>Pay the hospital directly. After paying, enter the UPI transaction reference/UTR below. The hospital or health authority must verify the transaction before the donation total changes.</span></div>
+        ${upi ? `<div class="modal-actions"><button class="abtn primary" data-action="open-upi-pay" data-id="${esc(c.id)}">Open UPI App</button></div>` : ''}
+        <div class="fld" style="margin-top:12px"><label>UPI Transaction Reference / UTR</label><input id="donateRef" maxlength="120" autocomplete="off" placeholder="Enter transaction ID after payment" /></div>
+      `}
       <div class="modal-actions"><button class="abtn ghost" data-action="close-modal">Cancel</button>
-      ${upi ? `<button class="abtn primary" data-action="open-upi-pay" data-id="${esc(c.id)}">Pay with UPI App</button>` : ''}</div>
+      ${payReady ? `<button class="abtn ok" data-action="submit-donation" data-id="${esc(c.id)}">Submit for Verification</button>` : ''}</div>
     `);
   }
 
@@ -915,8 +937,35 @@
     const upi = String(c.paymentUpiId || '').trim();
     if (!upi){ toast('UPI ID unavailable','Scan the hospital QR code using your UPI app.','bad'); return; }
     const params = new URLSearchParams({pa:upi, pn:c.hospitalName || 'Hospital', am:amt.toFixed(2), cu:'INR', tn:`LifeLink ${c.id} - ${c.patientName}`});
+    // The browser may open a UPI app on supported devices. This is not proof
+    // of payment; the donor must return and submit the transaction reference.
     window.location.href = `upi://pay?${params.toString()}`;
-    toast('Complete payment in your UPI app','The transfer goes to the hospital UPI account. Donation totals are not updated automatically because this app cannot verify the bank transaction.','info');
+  }
+
+  async function submitDonation(id){
+    const amount = Number(($('#donateAmt')||{}).value || 0);
+    const paymentRef = String(($('#donateRef')||{}).value || '').trim();
+    if (!Number.isFinite(amount) || amount <= 0) { toast('Invalid amount','Enter a valid donation amount.','bad'); return; }
+    if (paymentRef.length < 6) { toast('Transaction reference required','Enter the UPI transaction reference/UTR after completing payment.','bad'); return; }
+    try {
+      const result = await api('/donations', { method:'POST', body:JSON.stringify({caseId:id, amount, paymentRef}) });
+      closeModal();
+      await loadRoleData();
+      toast('Submitted for verification', result.data.message || 'The hospital must verify the transaction. The donation total has not changed yet.', 'info');
+    } catch (err) {
+      toast('Submission failed', err.message, 'bad');
+    }
+  }
+
+  async function reviewDonation(id, caseId, action){
+    try {
+      const result = await api(`/donations/${encodeURIComponent(id)}/${action}`, { method:'POST' });
+      await loadRoleData();
+      toast(action==='verify'?'Donation verified':'Donation rejected', result.data.message || 'Payment status updated.', action==='verify'?'ok':'info');
+      if (modalEl) await viewCase(caseId);
+    } catch (err) {
+      toast('Payment review failed', err.message, 'bad');
+    }
   }
 
   function acceptFlow(id){
@@ -1215,6 +1264,9 @@
       if (a==='donate'){ donateFlow(id); return; }
       if (a==='donate-quick'){ const inp=$('#donateAmt'); if(inp) inp.value=act.dataset.amt; return; }
       if (a==='open-upi-pay'){ openUpiPayment(id); return; }
+      if (a==='submit-donation'){ submitDonation(id); return; }
+      if (a==='verify-donation'){ reviewDonation(id, act.dataset.caseId, 'verify'); return; }
+      if (a==='reject-donation'){ reviewDonation(id, act.dataset.caseId, 'reject'); return; }
       if (a==='toggle-save'){
         (async () => {
           try {
